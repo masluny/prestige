@@ -4,7 +4,7 @@
 
 A point-and-click editor for OWL 2 Functional-Syntax ontologies. Prestige runs
 as a small local web server that serves a single-page web UI in your browser
-with a **modern dark Ayu Mirage theme, rounded "island" layout** and proper
+with a **modern dark theme, rounded "island" layout** and proper
 keyboard / accessibility support.
 
 - **Lossless** — axioms you don't touch are saved back byte-for-byte.
