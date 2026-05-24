@@ -74,6 +74,13 @@ const api = {
   diffAs:      (b) => postJSON("/api/different-individuals", b),
   classAssert: (b) => postJSON("/api/class-assertion", b),
   metadata:    () => getJSON("/api/ontology-metadata"),
+  removeRel:   (b) => postJSON("/api/remove-relation", b),
+  subProp:     (b) => postJSON("/api/sub-property", b),
+  propDomain:  (b) => postJSON("/api/property-domain", b),
+  propRange:   (b) => postJSON("/api/property-range", b),
+  charact:     (b) => postJSON("/api/characteristic", b),
+  inverse:     (b) => postJSON("/api/inverse-properties", b),
+  equivProp:   (b) => postJSON("/api/equivalent-properties", b),
 };
 
 // ----- app state ------------------------------------------------------
@@ -1019,34 +1026,33 @@ function buildSection(sec, d) {
       let k = r.target ? state._kinds?.get(r.target) : null;
       if (!k) k = fallback;
       if (k) cls += " kind-" + k;
+      if (r.remove) cls += " removable";
       row.className = cls;
-      row.textContent = r.text;
-      if (r.target) row.onclick = () => selectEntity(r.target);
+
+      const txt = document.createElement("span");
+      txt.className = "row-text";
+      txt.textContent = r.text;
+      if (r.target) txt.onclick = () => selectEntity(r.target);
+      row.appendChild(txt);
+
+      if (r.remove) {
+        const rm = document.createElement("button");
+        rm.type = "button";
+        rm.className = "row-remove";
+        rm.title = "Remove";
+        rm.innerHTML = "&times;";
+        rm.onclick = (e) => {
+          e.stopPropagation();
+          confirmRemoveRow(d, sec.title, r);
+        };
+        row.appendChild(rm);
+      }
       card.appendChild(row);
     }
   }
-  // Section-specific "+ Add" buttons (Protege-style)
-  let acts = null;
-  if (d.kind === "Class" && sec.title === "SubClass of") {
-    acts = [
-      ["+ Add parent",    () => openAddParentModal(d)],
-      ["Remove parent",   () => openRemoveParentModal(d)],
-    ];
-  } else if (d.kind === "Class" && sec.title === "Instances") {
-    acts = [["+ Add instance", () => openNewIndividualModal(d.qname)]];
-  } else if (d.kind === "NamedIndividual") {
-    if      (sec.title === "Types")
-      acts = [["+ Add type",          () => openAddTypeModal(d)]];
-    else if (sec.title === "Object property assertions")
-      acts = [["+ Add assertion",     () => openObjAssertModal(d)]];
-    else if (sec.title === "Data property assertions")
-      acts = [["+ Add assertion",     () => openDataAssertModal(d)]];
-    else if (sec.title === "Same as")
-      acts = [["+ Mark same as…",     () => openSameAsModal(d)]];
-    else if (sec.title === "Different from")
-      acts = [["+ Mark different…",   () => openDiffAsModal(d)]];
-  }
-  if (acts) {
+
+  const acts = sectionAddActions(d, sec);
+  if (acts && acts.length) {
     const row = document.createElement("div"); row.className = "actions";
     for (const [label, fn] of acts) {
       const b = document.createElement("button");
@@ -1056,6 +1062,82 @@ function buildSection(sec, d) {
     card.appendChild(row);
   }
   return card;
+}
+
+// Returns the list of "+ Add" buttons appropriate for this entity-kind
+// + section combination.
+function sectionAddActions(d, sec) {
+  const t = sec.title;
+  const kind = d.kind;
+
+  if (kind === "Class") {
+    if (t === "Equivalent to")
+      return [["+ Add equivalent",  () => openAddEquivalentClassModal(d)]];
+    if (t === "SubClass of")
+      return [["+ Add parent",      () => openAddParentModal(d)]];
+    if (t === "Disjoint with")
+      return [["+ Add disjoint",    () => openAddDisjointClassModal(d)]];
+    if (t === "Subclasses")
+      return [["+ New subclass",    () => openNewClassModal(d.qname)]];
+    if (t === "Instances")
+      return [["+ Add instance",    () => openNewIndividualModal(d.qname)]];
+  }
+
+  if (kind === "ObjectProperty" || kind === "DataProperty") {
+    const propKind = kind === "ObjectProperty" ? "object" : "data";
+    if (t === "Equivalent to")
+      return [["+ Add equivalent",  () => openAddEquivPropModal(d, propKind)]];
+    if (t === "Sub-property of")
+      return [["+ Add super-property", () => openAddSubPropertyModal(d, propKind)]];
+    if (t === "Domains")
+      return [["+ Add domain",      () => openAddDomainModal(d, propKind)]];
+    if (t === "Ranges")
+      return [["+ Add range",       () => openAddRangeModal(d, propKind)]];
+    if (t === "Characteristics")
+      return [["+ Add characteristic", () => openAddCharacteristicModal(d, propKind)]];
+    if (t === "Inverse of")
+      return [["+ Add inverse",     () => openAddInverseModal(d)]];
+  }
+
+  if (kind === "AnnotationProperty") {
+    if (t === "Sub-property of")
+      return [["+ Add super-property", () => openAddSubPropertyModal(d, "annotation")]];
+    if (t === "Domain")
+      return [["+ Add domain",      () => openAddDomainModal(d, "annotation")]];
+    if (t === "Range")
+      return [["+ Add range",       () => openAddRangeModal(d, "annotation")]];
+  }
+
+  if (kind === "NamedIndividual") {
+    if (t === "Types")
+      return [["+ Add type",            () => openAddTypeModal(d)]];
+    if (t === "Object property assertions")
+      return [["+ Add assertion",       () => openObjAssertModal(d)]];
+    if (t === "Data property assertions")
+      return [["+ Add assertion",       () => openDataAssertModal(d)]];
+    if (t === "Same as")
+      return [["+ Mark same as…",       () => openSameAsModal(d)]];
+    if (t === "Different from")
+      return [["+ Mark different…",     () => openDiffAsModal(d)]];
+  }
+
+  return null;
+}
+
+async function confirmRemoveRow(d, sectionTitle, row) {
+  const ok = await confirmDialog({
+    title: "Remove from " + sectionTitle,
+    body: `Remove "${row.text}" from "${d.name}" → ${sectionTitle}?\n\n` +
+          `For grouped axioms (Equivalent / Disjoint / Same / Different / Inverse) ` +
+          `only this entry is dropped; the rest is preserved.`,
+    okLabel: "Remove",
+  });
+  if (!ok) return;
+  try {
+    await api.removeRel({entity: d.qname, spec: row.remove});
+    toast("Removed");
+    await refresh(); await selectEntity(d.qname);
+  } catch (e) { toast(e.message || String(e), "error"); }
 }
 
 // ----- mutation modals ------------------------------------------------
@@ -1129,6 +1211,157 @@ async function openDeleteModal(d) {
       return true;
     }});
   if (ok) { toast("Deleted"); state.selected = null; state.detail = null; await refresh(); renderDetail(); }
+}
+
+async function confirmDialog({title, body, okLabel="OK", cancelLabel="Cancel"}) {
+  const box = document.createElement("div");
+  const p = document.createElement("p"); p.className = "form-help";
+  p.style.whiteSpace = "pre-wrap"; p.textContent = body;
+  box.appendChild(p);
+  return await modal({title, content: box, submitLabel: okLabel,
+    cancelLabel, onSubmit: async () => true}) === true;
+}
+
+async function openAddEquivalentClassModal(d) {
+  const cands = classNames().filter(n => n !== d.name);
+  const pick = selectField({label: "Equivalent class", options: ["", ...cands]});
+  const content = buildForm([pick],
+    `Asserts EquivalentClasses(${d.name}, …).`);
+  const ok = await modal({title: "Add equivalent class", content, submitLabel: "Add",
+    onSubmit: async () => {
+      if (!pick.get()) throw new Error("Pick a class.");
+      await api.equivalent({a: d.name, b: pick.get()});
+      return true;
+    }});
+  if (ok) { toast("Equivalence added"); await refresh(); await selectEntity(d.qname); }
+}
+
+async function openAddDisjointClassModal(d) {
+  const cands = classNames().filter(n => n !== d.name);
+  const others = chipsField({label: "Disjoint with (pick 1+)", candidates: cands});
+  const content = buildForm([others],
+    `Asserts DisjointClasses(${d.name}, …).`);
+  const ok = await modal({title: "Add disjoint class", content, submitLabel: "Add",
+    onSubmit: async () => {
+      if (!others.get().length) throw new Error("Pick at least one class.");
+      await api.disjoint({classes: [d.name, ...others.get()]});
+      return true;
+    }});
+  if (ok) { toast("Disjointness added"); await refresh(); await selectEntity(d.qname); }
+}
+
+async function openAddSubPropertyModal(d, propKind) {
+  // propKind: 'object' | 'data' | 'annotation'
+  let pool;
+  if (propKind === "object") pool = objPropNames();
+  else if (propKind === "data") pool = dataPropNames();
+  else pool = (state.entities.annotation_properties || []).map(x => x.name);
+  const cands = pool.filter(n => n !== d.name);
+  const pick = selectField({label: "Super-property", options: ["", ...cands]});
+  const content = buildForm([pick],
+    `Asserts Sub${propKind==="object"?"Object":propKind==="data"?"Data":"Annotation"}PropertyOf(${d.name}, parent).`);
+  const ok = await modal({title: "Add super-property", content, submitLabel: "Add",
+    onSubmit: async () => {
+      if (!pick.get()) throw new Error("Pick a super-property.");
+      await api.subProp({kind: propKind, child: d.name, parent: pick.get()});
+      return true;
+    }});
+  if (ok) { toast("Super-property added"); await refresh(); await selectEntity(d.qname); }
+}
+
+async function openAddDomainModal(d, propKind) {
+  const cands = classNames();
+  const pick = textField({label: propKind === "annotation" ?
+    "Domain IRI (any qname)" : "Domain class",
+    list: "domain-dl"});
+  const content = buildForm([pick],
+    `Asserts ${propKind==="object"?"ObjectPropertyDomain":propKind==="data"?"DataPropertyDomain":"AnnotationPropertyDomain"}(${d.name}, …).`);
+  const dl = document.createElement("datalist"); dl.id = "domain-dl";
+  for (const n of cands) { const o = document.createElement("option"); o.value = n; dl.appendChild(o); }
+  content.appendChild(dl);
+  const ok = await modal({title: "Add domain", content, submitLabel: "Add",
+    onSubmit: async () => {
+      if (!pick.get().trim()) throw new Error("Pick a class / IRI.");
+      await api.propDomain({kind: propKind, prop: d.name, target: pick.get()});
+      return true;
+    }});
+  if (ok) { toast("Domain added"); await refresh(); await selectEntity(d.qname); }
+}
+
+async function openAddRangeModal(d, propKind) {
+  let cands, listLabel;
+  if (propKind === "object") { cands = classNames(); listLabel = "Range class"; }
+  else if (propKind === "data") {
+    cands = ["xsd:string","xsd:integer","xsd:decimal","xsd:boolean",
+            "xsd:float","xsd:dateTime"];
+    listLabel = "Range datatype";
+  } else { cands = classNames(); listLabel = "Range IRI"; }
+  const pick = textField({label: listLabel, list: "range-dl"});
+  const content = buildForm([pick],
+    `Asserts ${propKind==="object"?"ObjectPropertyRange":propKind==="data"?"DataPropertyRange":"AnnotationPropertyRange"}(${d.name}, …).`);
+  const dl = document.createElement("datalist"); dl.id = "range-dl";
+  for (const n of cands) { const o = document.createElement("option"); o.value = n; dl.appendChild(o); }
+  content.appendChild(dl);
+  const ok = await modal({title: "Add range", content, submitLabel: "Add",
+    onSubmit: async () => {
+      if (!pick.get().trim()) throw new Error("Pick a class / datatype / IRI.");
+      await api.propRange({kind: propKind, prop: d.name, target: pick.get()});
+      return true;
+    }});
+  if (ok) { toast("Range added"); await refresh(); await selectEntity(d.qname); }
+}
+
+async function openAddCharacteristicModal(d, propKind) {
+  let opts;
+  if (propKind === "object") opts = [
+    {value: "FunctionalObjectProperty",         label: "Functional"},
+    {value: "InverseFunctionalObjectProperty",  label: "Inverse functional"},
+    {value: "TransitiveObjectProperty",         label: "Transitive"},
+    {value: "SymmetricObjectProperty",          label: "Symmetric"},
+    {value: "AsymmetricObjectProperty",         label: "Asymmetric"},
+    {value: "ReflexiveObjectProperty",          label: "Reflexive"},
+    {value: "IrreflexiveObjectProperty",        label: "Irreflexive"},
+  ]; else opts = [
+    {value: "FunctionalDataProperty",           label: "Functional"},
+  ];
+  const pick = selectField({label: "Characteristic", options: opts});
+  const content = buildForm([pick],
+    `Adds the chosen characteristic axiom for ${d.name}.`);
+  const ok = await modal({title: "Add characteristic", content, submitLabel: "Add",
+    onSubmit: async () => {
+      await api.charact({prop: d.name, functor: pick.get()});
+      return true;
+    }});
+  if (ok) { toast("Characteristic added"); await refresh(); await selectEntity(d.qname); }
+}
+
+async function openAddInverseModal(d) {
+  const cands = objPropNames().filter(n => n !== d.name);
+  const pick = selectField({label: "Inverse property", options: ["", ...cands]});
+  const content = buildForm([pick],
+    `Asserts InverseObjectProperties(${d.name}, …).`);
+  const ok = await modal({title: "Add inverse", content, submitLabel: "Add",
+    onSubmit: async () => {
+      if (!pick.get()) throw new Error("Pick an object property.");
+      await api.inverse({a: d.name, b: pick.get()});
+      return true;
+    }});
+  if (ok) { toast("Inverse axiom added"); await refresh(); await selectEntity(d.qname); }
+}
+
+async function openAddEquivPropModal(d, propKind) {
+  const pool = propKind === "object" ? objPropNames() : dataPropNames();
+  const cands = pool.filter(n => n !== d.name);
+  const pick = selectField({label: "Equivalent property", options: ["", ...cands]});
+  const content = buildForm([pick],
+    `Asserts Equivalent${propKind==="object"?"Object":"Data"}Properties(${d.name}, …).`);
+  const ok = await modal({title: "Add equivalent property", content, submitLabel: "Add",
+    onSubmit: async () => {
+      if (!pick.get()) throw new Error("Pick a property.");
+      await api.equivProp({kind: propKind, a: d.name, b: pick.get()});
+      return true;
+    }});
+  if (ok) { toast("Equivalence added"); await refresh(); await selectEntity(d.qname); }
 }
 
 async function openAddParentModal(d) {

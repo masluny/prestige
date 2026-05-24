@@ -170,10 +170,7 @@ def _describe(o: Ontology, qname: str):
         "label": o.get_label(qname),
         "annotations": [{"prop": p, "text": t} for p, t in o.get_annotations(qname)],
         "sections": [
-            {
-                "title": title,
-                "rows": [{"text": text, "target": target} for text, target in rows],
-            }
+            {"title": title, "rows": rows}
             for title, rows in sections
         ],
         "appears_in": [" ".join(line.split())
@@ -516,6 +513,93 @@ def api_raw(body: RawAxiomIn):
     o = _ont()
     functor = o.add_raw_axiom(body.text)
     return _ok("Added %s axiom" % functor)
+
+
+# ---------------------------------------------------------------------------
+# Detail-panel row operations (+ Add / Remove buttons)
+# ---------------------------------------------------------------------------
+
+class RemoveRelationIn(BaseModel):
+    entity: str
+    spec: dict
+
+
+@app.post("/api/remove-relation")
+def api_remove_relation(body: RemoveRelationIn):
+    o = _ont()
+    o.remove_relation(body.entity, body.spec)
+    return _ok("Removed", selected=o._qname(body.entity))
+
+
+class SubPropIn(BaseModel):
+    kind: str        # 'object' | 'data' | 'annotation'
+    child: str
+    parent: str
+
+
+@app.post("/api/sub-property")
+def api_sub_property(body: SubPropIn):
+    o = _ont()
+    o.add_sub_property(body.kind, body.child, body.parent)
+    return _ok("Sub-property added", selected=o._qname(body.child))
+
+
+class PropDomainRangeIn(BaseModel):
+    kind: str        # 'object' | 'data' | 'annotation'
+    prop: str
+    target: str      # class qname for domain (any kind); class for object
+                     # range, datatype for data range, IRI for annotation range
+
+
+@app.post("/api/property-domain")
+def api_property_domain(body: PropDomainRangeIn):
+    o = _ont()
+    o.add_property_domain(body.kind, body.prop, body.target)
+    return _ok("Domain added", selected=o._qname(body.prop))
+
+
+@app.post("/api/property-range")
+def api_property_range(body: PropDomainRangeIn):
+    o = _ont()
+    o.add_property_range(body.kind, body.prop, body.target)
+    return _ok("Range added", selected=o._qname(body.prop))
+
+
+class CharacteristicIn(BaseModel):
+    prop: str
+    functor: str    # e.g. "FunctionalObjectProperty"
+
+
+@app.post("/api/characteristic")
+def api_characteristic(body: CharacteristicIn):
+    o = _ont()
+    o.add_characteristic(body.prop, body.functor)
+    return _ok("Characteristic added", selected=o._qname(body.prop))
+
+
+class InverseIn(BaseModel):
+    a: str
+    b: str
+
+
+@app.post("/api/inverse-properties")
+def api_inverse(body: InverseIn):
+    o = _ont()
+    o.add_inverse_properties(body.a, body.b)
+    return _ok("Inverse axiom added", selected=o._qname(body.a))
+
+
+class EquivPropIn(BaseModel):
+    kind: str    # 'object' | 'data'
+    a: str
+    b: str
+
+
+@app.post("/api/equivalent-properties")
+def api_equiv_props(body: EquivPropIn):
+    o = _ont()
+    o.add_equivalent_properties(body.kind, body.a, body.b)
+    return _ok("Equivalent properties added", selected=o._qname(body.a))
 
 
 # ---------------------------------------------------------------------------

@@ -312,45 +312,82 @@ class Ontology:
         """Describe an entity's relationships, Protege-style.
 
         Returns (kind, sections) where `sections` is an ordered list of
-        (title, rows) and each row is a (display_text, target) tuple.
-        `target` is a navigable qname, or None for class expressions and
-        literals."""
+        (title, rows) and each row is a dict
+        {"text", "target", "remove"}:
+          * "target" is a navigable qname or None,
+          * "remove" is a dict identifying the axiom this row corresponds
+            to so it can be deleted via `remove_relation()`, or None for
+            non-removable rows (summary lines etc.)."""
         name = self._qname(name)
         kind = self.kind_of(name)        # declared OR referenced built-ins
         axioms = self.refs.get(name, [])
 
-        def operand(arg):
-            if isinstance(arg, Iri):
-                return (ofn.local_name(arg.value), arg.value)
-            return (self._pretty(arg), None)
+        def row(text, target=None, remove=None):
+            return {"text": text, "target": target, "remove": remove}
 
-        def others(args):
-            """Operands of an n-ary axiom other than `name` itself."""
-            return [operand(a) for a in args
-                    if not (isinstance(a, Iri) and a.value == name)]
+        def operand_qname(arg):
+            return arg.value if isinstance(arg, Iri) else None
+
+        def operand_text(arg):
+            if isinstance(arg, Iri):
+                return ofn.local_name(arg.value)
+            return self._pretty(arg)
+
+        def named_others(args):
+            """Named operands of an n-ary axiom other than `name` itself."""
+            return [a.value for a in args
+                    if isinstance(a, Iri) and a.value != name]
 
         def involves(args):
             return any(isinstance(a, Iri) and a.value == name for a in args)
+
+        def literal_spec(lit):
+            """Stable identifier for a literal so it can be matched later."""
+            d = {"lex": lit.lexical}
+            if lit.lang:
+                d["lang"] = lit.lang
+            if lit.datatype is not None:
+                d["datatype"] = lit.datatype.value
+            return d
 
         sections = []
 
         if kind == "Class":
             equiv, supers, disjoint, instances = [], [], [], []
             for ax in axioms:
-                nd, f, A = ax.node, ax.node.functor, ax.node.args
+                f, A = ax.node.functor, ax.node.args
                 if f == "EquivalentClasses" and involves(A):
-                    equiv += others(A)
+                    for q in named_others(A):
+                        equiv.append(row(ofn.local_name(q), q,
+                                         {"kind": "equiv_class", "other": q}))
                 elif f == "SubClassOf" and len(A) == 2 \
                         and isinstance(A[0], Iri) and A[0].value == name:
-                    supers.append(operand(A[1]))
+                    rhs = A[1]
+                    if isinstance(rhs, Iri):
+                        supers.append(row(ofn.local_name(rhs.value), rhs.value,
+                                          {"kind": "subclass_of",
+                                           "parent": rhs.value}))
+                    else:
+                        text = self._pretty(rhs)
+                        supers.append(row(text, None,
+                                          {"kind": "subclass_of_expr",
+                                           "expr_text": text}))
                 elif f == "DisjointClasses" and involves(A):
-                    disjoint += others(A)
+                    for q in named_others(A):
+                        disjoint.append(row(ofn.local_name(q), q,
+                                            {"kind": "disjoint_class",
+                                             "other": q}))
                 elif f == "ClassAssertion" and len(A) == 2 \
                         and isinstance(A[0], Iri) and A[0].value == name \
                         and isinstance(A[1], Iri):
-                    instances.append((ofn.local_name(A[1].value), A[1].value))
-            subclasses = [(ofn.local_name(c), c)
-                          for c in sorted(self.children.get(name, []))]
+                    ind = A[1].value
+                    instances.append(row(ofn.local_name(ind), ind,
+                                         {"kind": "class_assertion",
+                                          "individual": ind}))
+            subclasses = []
+            for c in sorted(self.children.get(name, [])):
+                subclasses.append(row(ofn.local_name(c), c,
+                                      {"kind": "child_class", "child": c}))
             sections = [
                 ("Equivalent to", equiv),
                 ("SubClass of", supers),
@@ -372,18 +409,34 @@ class Ontology:
                 f, A = ax.node.functor, ax.node.args
                 first_is_name = (A and isinstance(A[0], Iri)
                                  and A[0].value == name)
-                if f == sub_f and len(A) == 2 and first_is_name:
-                    supers.append(operand(A[1]))
-                elif f == dom_f and len(A) == 2 and first_is_name:
-                    domains.append(operand(A[1]))
-                elif f == ran_f and len(A) == 2 and first_is_name:
-                    ranges.append(operand(A[1]))
+                if f == sub_f and len(A) == 2 and first_is_name \
+                        and isinstance(A[1], Iri):
+                    p = A[1].value
+                    supers.append(row(ofn.local_name(p), p,
+                                      {"kind": "sub_property", "parent": p}))
+                elif f == dom_f and len(A) == 2 and first_is_name \
+                        and isinstance(A[1], Iri):
+                    c = A[1].value
+                    domains.append(row(ofn.local_name(c), c,
+                                       {"kind": "domain", "cls": c}))
+                elif f == ran_f and len(A) == 2 and first_is_name \
+                        and isinstance(A[1], Iri):
+                    c = A[1].value
+                    ranges.append(row(ofn.local_name(c), c,
+                                      {"kind": "range", "cls": c}))
                 elif f in CHARACTERISTIC_LABELS and first_is_name:
-                    chars.append((CHARACTERISTIC_LABELS[f], None))
+                    chars.append(row(CHARACTERISTIC_LABELS[f], None,
+                                     {"kind": "characteristic",
+                                      "functor": f}))
                 elif f == "InverseObjectProperties" and involves(A):
-                    inverses += others(A)
+                    for q in named_others(A):
+                        inverses.append(row(ofn.local_name(q), q,
+                                            {"kind": "inverse", "other": q}))
                 elif f == eq_f and involves(A):
-                    equiv += others(A)
+                    for q in named_others(A):
+                        equiv.append(row(ofn.local_name(q), q,
+                                         {"kind": "equiv_property",
+                                          "other": q}))
             sections = [
                 ("Equivalent to", equiv),
                 ("Sub-property of", supers),
@@ -403,21 +456,36 @@ class Ontology:
                         and isinstance(A[0], Iri) and A[0].value == name:
                     usage_count += 1
                 elif f == "SubAnnotationPropertyOf" and len(A) >= 2 \
-                        and isinstance(A[0], Iri) and A[0].value == name:
-                    supers.append(operand(A[1]))
+                        and isinstance(A[0], Iri) and A[0].value == name \
+                        and isinstance(A[1], Iri):
+                    p = A[1].value
+                    supers.append(row(ofn.local_name(p), p,
+                                      {"kind": "sub_annotation_property",
+                                       "parent": p}))
                 elif f == "AnnotationPropertyDomain" and len(A) >= 2 \
-                        and isinstance(A[0], Iri) and A[0].value == name:
-                    domains.append(operand(A[1]))
+                        and isinstance(A[0], Iri) and A[0].value == name \
+                        and isinstance(A[1], Iri):
+                    c = A[1].value
+                    domains.append(row(ofn.local_name(c), c,
+                                       {"kind": "annotation_domain",
+                                        "iri": c}))
                 elif f == "AnnotationPropertyRange" and len(A) >= 2 \
-                        and isinstance(A[0], Iri) and A[0].value == name:
-                    ranges.append(operand(A[1]))
+                        and isinstance(A[0], Iri) and A[0].value == name \
+                        and isinstance(A[1], Iri):
+                    c = A[1].value
+                    ranges.append(row(ofn.local_name(c), c,
+                                      {"kind": "annotation_range",
+                                       "iri": c}))
+            usage_rows = []
+            if usage_count:
+                usage_rows.append(row(
+                    "%d annotation assertion(s) use this property"
+                    % usage_count))
             sections = [
                 ("Sub-property of", supers),
                 ("Domain", domains),
                 ("Range", ranges),
-                ("Used in annotation assertions",
-                 [("%d annotation assertion(s) use this property"
-                   % usage_count, None)] if usage_count else []),
+                ("Used in annotation assertions", usage_rows),
             ]
 
         elif kind == "Datatype":
@@ -428,18 +496,23 @@ class Ontology:
                 if f == "DataPropertyRange" and len(A) >= 2 \
                         and isinstance(A[1], Iri) and A[1].value == name \
                         and isinstance(A[0], Iri):
-                    range_of.append(operand(A[0]))
+                    p = A[0].value
+                    range_of.append(row(ofn.local_name(p), p,
+                                        {"kind": "datatype_range_of",
+                                         "data_property": p}))
                 for nd in iter_nodes(ax.node):
                     for arg in nd.args:
                         if isinstance(arg, Literal) \
                                 and arg.datatype is not None \
                                 and arg.datatype.value == name:
                             literal_count += 1
+            usage_rows = []
+            if literal_count:
+                usage_rows.append(row(
+                    "%d literal(s) typed as this" % literal_count))
             sections = [
                 ("Range of (data properties)", range_of),
-                ("Literal usages",
-                 [("%d literal(s) typed as this" % literal_count, None)]
-                 if literal_count else []),
+                ("Literal usages", usage_rows),
             ]
 
         elif kind == "NamedIndividual":
@@ -448,22 +521,42 @@ class Ontology:
             for ax in axioms:
                 f, A = ax.node.functor, ax.node.args
                 if f == "ClassAssertion" and len(A) == 2 \
-                        and isinstance(A[1], Iri) and A[1].value == name:
-                    types_.append(operand(A[0]))
+                        and isinstance(A[1], Iri) and A[1].value == name \
+                        and isinstance(A[0], Iri):
+                    c = A[0].value
+                    types_.append(row(ofn.local_name(c), c,
+                                      {"kind": "type", "cls": c}))
                 elif f == "ObjectPropertyAssertion" and len(A) == 3 \
-                        and isinstance(A[1], Iri) and A[1].value == name:
-                    tgt = operand(A[2])
-                    obj_assert.append(
-                        ("%s  ->  %s" % (self._pretty(A[0]), tgt[0]), tgt[1]))
+                        and isinstance(A[1], Iri) and A[1].value == name \
+                        and isinstance(A[0], Iri) and isinstance(A[2], Iri):
+                    prop = A[0].value
+                    tgt = A[2].value
+                    obj_assert.append(row(
+                        "%s  ->  %s" % (ofn.local_name(prop),
+                                        ofn.local_name(tgt)),
+                        tgt, {"kind": "obj_assertion",
+                              "prop": prop, "target": tgt}))
                 elif f == "DataPropertyAssertion" and len(A) == 3 \
-                        and isinstance(A[1], Iri) and A[1].value == name:
-                    data_assert.append(
-                        ("%s  ->  %s" % (self._pretty(A[0]),
-                                         self._pretty(A[2])), None))
+                        and isinstance(A[1], Iri) and A[1].value == name \
+                        and isinstance(A[0], Iri) \
+                        and isinstance(A[2], Literal):
+                    prop = A[0].value
+                    spec = {"kind": "data_assertion", "prop": prop,
+                            "literal": literal_spec(A[2])}
+                    data_assert.append(row(
+                        "%s  ->  %s" % (ofn.local_name(prop),
+                                        self._pretty(A[2])),
+                        None, spec))
                 elif f == "SameIndividual" and involves(A):
-                    same += others(A)
+                    for q in named_others(A):
+                        same.append(row(ofn.local_name(q), q,
+                                        {"kind": "same_individual",
+                                         "other": q}))
                 elif f == "DifferentIndividuals" and involves(A):
-                    different += others(A)
+                    for q in named_others(A):
+                        different.append(row(ofn.local_name(q), q,
+                                             {"kind": "different_individual",
+                                              "other": q}))
             sections = [
                 ("Types", types_),
                 ("Object property assertions", obj_assert),
@@ -1054,6 +1147,382 @@ class Ontology:
         self._begin()
         self._remove_axioms(lambda ax: ax is match)
         self._commit()
+
+    # ---------------------------------------------------------------------
+    # Misc small "add" operations used by Protege-style + buttons.
+    # ---------------------------------------------------------------------
+
+    def add_sub_property(self, kind, child, parent):
+        """Assert a sub-property axiom.  kind in {object, data, annotation}."""
+        functor = {
+            "object":     "SubObjectPropertyOf",
+            "data":       "SubDataPropertyOf",
+            "annotation": "SubAnnotationPropertyOf",
+        }[kind]
+        ent_kind = {"object": "ObjectProperty", "data": "DataProperty",
+                    "annotation": "AnnotationProperty"}[kind]
+        child = self._qname(child)
+        parent = self._qname(parent)
+        self._require(child, ent_kind)
+        self._require(parent, ent_kind)
+        if child == parent:
+            raise ModelError("A property cannot be its own super-property.")
+        self._begin()
+        self._insert_axiom(Node(functor, [Iri(child), Iri(parent)]),
+                           {functor, "Declaration"})
+        self._commit()
+
+    def add_property_domain(self, kind, prop, cls):
+        """Add a domain axiom for an object/data/annotation property."""
+        functor = {
+            "object":     "ObjectPropertyDomain",
+            "data":       "DataPropertyDomain",
+            "annotation": "AnnotationPropertyDomain",
+        }[kind]
+        ent_kind = {"object": "ObjectProperty", "data": "DataProperty",
+                    "annotation": "AnnotationProperty"}[kind]
+        prop = self._qname(prop)
+        cls = self._qname(cls)
+        self._require(prop, ent_kind)
+        if kind != "annotation":
+            self._require(cls, "Class")
+        self._begin()
+        self._insert_axiom(Node(functor, [Iri(prop), Iri(cls)]),
+                           {functor, "Declaration"})
+        self._commit()
+
+    def add_property_range(self, kind, prop, target):
+        """Add a range axiom. target is a class (object/annotation) or
+        datatype (data)."""
+        functor = {
+            "object":     "ObjectPropertyRange",
+            "data":       "DataPropertyRange",
+            "annotation": "AnnotationPropertyRange",
+        }[kind]
+        ent_kind = {"object": "ObjectProperty", "data": "DataProperty",
+                    "annotation": "AnnotationProperty"}[kind]
+        prop = self._qname(prop)
+        target = self._qname(target)
+        self._require(prop, ent_kind)
+        if kind == "object":
+            self._require(target, "Class")
+        self._begin()
+        self._insert_axiom(Node(functor, [Iri(prop), Iri(target)]),
+                           {functor, "Declaration"})
+        self._commit()
+
+    def add_characteristic(self, prop, functor):
+        """Assert a property characteristic (Functional, Symmetric, ...)."""
+        if functor not in CHARACTERISTIC_LABELS:
+            raise ModelError("Unknown property characteristic '%s'." % functor)
+        prop = self._qname(prop)
+        if functor == "FunctionalDataProperty":
+            self._require(prop, "DataProperty")
+        else:
+            self._require(prop, "ObjectProperty")
+        self._begin()
+        self._insert_axiom(Node(functor, [Iri(prop)]), {functor, "Declaration"})
+        self._commit()
+
+    def add_inverse_properties(self, a, b):
+        """Assert InverseObjectProperties(a, b)."""
+        a = self._qname(a); b = self._qname(b)
+        self._require(a, "ObjectProperty")
+        self._require(b, "ObjectProperty")
+        if a == b:
+            raise ModelError("A property cannot be its own inverse this way.")
+        self._begin()
+        self._insert_axiom(Node("InverseObjectProperties", [Iri(a), Iri(b)]),
+                           {"InverseObjectProperties", "Declaration"})
+        self._commit()
+
+    def add_equivalent_properties(self, kind, a, b):
+        """Assert Equivalent{Object,Data}Properties(a, b)."""
+        functor = ("EquivalentObjectProperties" if kind == "object"
+                   else "EquivalentDataProperties")
+        ent_kind = "ObjectProperty" if kind == "object" else "DataProperty"
+        a = self._qname(a); b = self._qname(b)
+        self._require(a, ent_kind); self._require(b, ent_kind)
+        if a == b:
+            raise ModelError("Properties are already the same entity.")
+        self._begin()
+        self._insert_axiom(Node(functor, [Iri(a), Iri(b)]),
+                           {functor, "Declaration"})
+        self._commit()
+
+    # ---------------------------------------------------------------------
+    # Single dispatch for removing a row from a detail-panel section.
+    # ---------------------------------------------------------------------
+
+    def remove_relation(self, entity, spec):
+        """Delete the axiom (or axiom-fragment) a row corresponds to.
+
+        `spec` is the dict the row carried in describe() under its
+        "remove" key."""
+        entity = self._qname(entity)
+        if not isinstance(spec, dict) or "kind" not in spec:
+            raise ModelError("Invalid remove spec.")
+        kind = spec["kind"]
+
+        # -- helpers ---------------------------------------------------
+        def drop_axioms(pred):
+            self._begin()
+            n = self._remove_axioms(pred)
+            if not n:
+                # nothing matched: roll back the snapshot we just pushed
+                self._undo.pop()
+                raise ModelError("No matching axiom found to remove.")
+            self._commit()
+            return n
+
+        def prune_n_ary(functor, partners):
+            """Remove `partners` (and entity if needed) from every axiom of
+            the given n-ary functor that contains `entity` AND every
+            partner. Axioms left with fewer than 2 operands are dropped
+            entirely.  `partners` is a set of qnames."""
+            self._begin()
+            kept = []
+            mutated = False
+            for it in self.doc.items:
+                if isinstance(it, Axiom) and it.node.functor == functor:
+                    args = it.node.args
+                    iris = [a for a in args
+                            if isinstance(a, Iri)]
+                    iri_vals = [a.value for a in iris]
+                    if entity in iri_vals and \
+                            all(p in iri_vals for p in partners):
+                        # drop partner(s); keep entity unless it'd be alone
+                        new_args = [a for a in args
+                                    if not (isinstance(a, Iri)
+                                            and a.value in partners)]
+                        named_count = sum(1 for a in new_args
+                                          if isinstance(a, Iri))
+                        if len(new_args) >= 2 and named_count >= 1:
+                            it.node.args = new_args
+                            it.touch()
+                            kept.append(it)
+                        # else: skip the whole axiom (drop)
+                        mutated = True
+                        continue
+                kept.append(it)
+            if not mutated:
+                self._undo.pop()
+                raise ModelError("No matching axiom found to remove.")
+            self.doc.items = kept
+            self._commit()
+
+        # -- dispatch --------------------------------------------------
+        if kind == "subclass_of":
+            parent = self._qname(spec["parent"])
+            drop_axioms(lambda ax:
+                ax.node.functor == "SubClassOf"
+                and len(ax.node.args) == 2
+                and isinstance(ax.node.args[0], Iri)
+                and ax.node.args[0].value == entity
+                and isinstance(ax.node.args[1], Iri)
+                and ax.node.args[1].value == parent)
+
+        elif kind == "subclass_of_expr":
+            target_text = spec["expr_text"]
+            def is_match(ax):
+                nd = ax.node
+                if nd.functor != "SubClassOf" or len(nd.args) != 2:
+                    return False
+                if not (isinstance(nd.args[0], Iri)
+                        and nd.args[0].value == entity):
+                    return False
+                rhs = nd.args[1]
+                if isinstance(rhs, Iri):
+                    return False
+                return self._pretty(rhs) == target_text
+            drop_axioms(is_match)
+
+        elif kind == "child_class":
+            child = self._qname(spec["child"])
+            drop_axioms(lambda ax:
+                ax.node.functor == "SubClassOf"
+                and len(ax.node.args) == 2
+                and isinstance(ax.node.args[0], Iri)
+                and ax.node.args[0].value == child
+                and isinstance(ax.node.args[1], Iri)
+                and ax.node.args[1].value == entity)
+
+        elif kind == "equiv_class":
+            prune_n_ary("EquivalentClasses",
+                        {self._qname(spec["other"])})
+
+        elif kind == "disjoint_class":
+            prune_n_ary("DisjointClasses",
+                        {self._qname(spec["other"])})
+
+        elif kind == "class_assertion":
+            ind = self._qname(spec["individual"])
+            drop_axioms(lambda ax:
+                ax.node.functor == "ClassAssertion"
+                and len(ax.node.args) == 2
+                and isinstance(ax.node.args[0], Iri)
+                and ax.node.args[0].value == entity
+                and isinstance(ax.node.args[1], Iri)
+                and ax.node.args[1].value == ind)
+
+        elif kind == "type":
+            cls = self._qname(spec["cls"])
+            drop_axioms(lambda ax:
+                ax.node.functor == "ClassAssertion"
+                and len(ax.node.args) == 2
+                and isinstance(ax.node.args[0], Iri)
+                and ax.node.args[0].value == cls
+                and isinstance(ax.node.args[1], Iri)
+                and ax.node.args[1].value == entity)
+
+        elif kind == "obj_assertion":
+            prop = self._qname(spec["prop"])
+            target = self._qname(spec["target"])
+            drop_axioms(lambda ax:
+                ax.node.functor == "ObjectPropertyAssertion"
+                and len(ax.node.args) == 3
+                and isinstance(ax.node.args[0], Iri)
+                and ax.node.args[0].value == prop
+                and isinstance(ax.node.args[1], Iri)
+                and ax.node.args[1].value == entity
+                and isinstance(ax.node.args[2], Iri)
+                and ax.node.args[2].value == target)
+
+        elif kind == "data_assertion":
+            prop = self._qname(spec["prop"])
+            lit_spec = spec.get("literal", {})
+            lex = lit_spec.get("lex", "")
+            lang = lit_spec.get("lang")
+            datatype = lit_spec.get("datatype")
+            def match(ax):
+                nd = ax.node
+                if nd.functor != "DataPropertyAssertion" or len(nd.args) != 3:
+                    return False
+                a0, a1, a2 = nd.args
+                if not (isinstance(a0, Iri) and a0.value == prop):
+                    return False
+                if not (isinstance(a1, Iri) and a1.value == entity):
+                    return False
+                if not isinstance(a2, Literal):
+                    return False
+                if a2.lexical != lex:
+                    return False
+                if (a2.lang or None) != (lang or None):
+                    return False
+                a2_dt = a2.datatype.value if a2.datatype else None
+                if a2_dt != datatype:
+                    return False
+                return True
+            drop_axioms(match)
+
+        elif kind == "same_individual":
+            prune_n_ary("SameIndividual", {self._qname(spec["other"])})
+
+        elif kind == "different_individual":
+            prune_n_ary("DifferentIndividuals", {self._qname(spec["other"])})
+
+        elif kind == "sub_property":
+            parent = self._qname(spec["parent"])
+            ekind = self.declared.get(entity)
+            functor = ("SubObjectPropertyOf" if ekind == "ObjectProperty"
+                       else "SubDataPropertyOf")
+            drop_axioms(lambda ax:
+                ax.node.functor == functor
+                and len(ax.node.args) == 2
+                and isinstance(ax.node.args[0], Iri)
+                and ax.node.args[0].value == entity
+                and isinstance(ax.node.args[1], Iri)
+                and ax.node.args[1].value == parent)
+
+        elif kind == "sub_annotation_property":
+            parent = self._qname(spec["parent"])
+            drop_axioms(lambda ax:
+                ax.node.functor == "SubAnnotationPropertyOf"
+                and len(ax.node.args) >= 2
+                and isinstance(ax.node.args[0], Iri)
+                and ax.node.args[0].value == entity
+                and isinstance(ax.node.args[1], Iri)
+                and ax.node.args[1].value == parent)
+
+        elif kind == "domain":
+            cls = self._qname(spec["cls"])
+            ekind = self.declared.get(entity)
+            functor = ("ObjectPropertyDomain" if ekind == "ObjectProperty"
+                       else "DataPropertyDomain")
+            drop_axioms(lambda ax:
+                ax.node.functor == functor
+                and len(ax.node.args) == 2
+                and isinstance(ax.node.args[0], Iri)
+                and ax.node.args[0].value == entity
+                and isinstance(ax.node.args[1], Iri)
+                and ax.node.args[1].value == cls)
+
+        elif kind == "range":
+            cls = self._qname(spec["cls"])
+            ekind = self.declared.get(entity)
+            functor = ("ObjectPropertyRange" if ekind == "ObjectProperty"
+                       else "DataPropertyRange")
+            drop_axioms(lambda ax:
+                ax.node.functor == functor
+                and len(ax.node.args) == 2
+                and isinstance(ax.node.args[0], Iri)
+                and ax.node.args[0].value == entity
+                and isinstance(ax.node.args[1], Iri)
+                and ax.node.args[1].value == cls)
+
+        elif kind == "annotation_domain":
+            iri = self._qname(spec["iri"])
+            drop_axioms(lambda ax:
+                ax.node.functor == "AnnotationPropertyDomain"
+                and len(ax.node.args) >= 2
+                and isinstance(ax.node.args[0], Iri)
+                and ax.node.args[0].value == entity
+                and isinstance(ax.node.args[1], Iri)
+                and ax.node.args[1].value == iri)
+
+        elif kind == "annotation_range":
+            iri = self._qname(spec["iri"])
+            drop_axioms(lambda ax:
+                ax.node.functor == "AnnotationPropertyRange"
+                and len(ax.node.args) >= 2
+                and isinstance(ax.node.args[0], Iri)
+                and ax.node.args[0].value == entity
+                and isinstance(ax.node.args[1], Iri)
+                and ax.node.args[1].value == iri)
+
+        elif kind == "characteristic":
+            functor = spec["functor"]
+            if functor not in CHARACTERISTIC_LABELS:
+                raise ModelError("Unknown characteristic '%s'." % functor)
+            drop_axioms(lambda ax:
+                ax.node.functor == functor
+                and len(ax.node.args) >= 1
+                and isinstance(ax.node.args[0], Iri)
+                and ax.node.args[0].value == entity)
+
+        elif kind == "inverse":
+            prune_n_ary("InverseObjectProperties",
+                        {self._qname(spec["other"])})
+
+        elif kind == "equiv_property":
+            ekind = self.declared.get(entity)
+            functor = ("EquivalentObjectProperties"
+                       if ekind == "ObjectProperty"
+                       else "EquivalentDataProperties")
+            prune_n_ary(functor, {self._qname(spec["other"])})
+
+        elif kind == "datatype_range_of":
+            dp = self._qname(spec["data_property"])
+            drop_axioms(lambda ax:
+                ax.node.functor == "DataPropertyRange"
+                and len(ax.node.args) == 2
+                and isinstance(ax.node.args[0], Iri)
+                and ax.node.args[0].value == dp
+                and isinstance(ax.node.args[1], Iri)
+                and ax.node.args[1].value == entity)
+
+        else:
+            raise ModelError("Unknown remove spec kind: %s" % kind)
 
     # -- validation ---------------------------------------------------------
 
