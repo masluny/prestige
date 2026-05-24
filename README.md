@@ -28,7 +28,7 @@ keyboard / accessibility support.
 ## 2. Run it
 
 ```bash
-cd ~/Documents/PythonProgramming/roadsign_ontology_editor
+cd ~/*path*/roadsign_ontology_editor
 python3 app.py
 ```
 
