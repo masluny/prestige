@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# Editor temp / backups
+*.bak
+*.uploaded.bak
+*.swp
+.vscode/
+.idea/
+
+# Generated files (regenerable via the UI)
+ontology_BORN.owl
+*_BORN.owl

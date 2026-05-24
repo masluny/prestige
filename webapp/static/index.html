@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prestige — OWL ontology editor</title>
+  <link rel="icon" type="image/png" href="/static/favicon.png">
+  <link rel="stylesheet" href="/static/styles.css?v=5">
+</head>
+<body>
+  <header class="island top" id="topbar">
+    <div class="brand">
+      <img class="logo" src="/static/logo.png" alt="Prestige logo">
+      <div class="brand-text">
+        <div class="brand-title">Prestige</div>
+        <div class="brand-sub" id="file-info">loading…</div>
+      </div>
+    </div>
+    <div class="toolbar" id="toolbar" role="toolbar" aria-label="Main toolbar"></div>
+  </header>
+
+  <main class="middle">
+    <aside class="island left">
+      <div class="search">
+        <span class="icon-search" aria-hidden="true"></span>
+        <input type="text" id="search-input"
+               placeholder="Search classes…  (Ctrl+F)"
+               aria-label="Search classes">
+      </div>
+      <div class="tabs" role="tablist" id="tabs"></div>
+      <div class="list-pane" id="list-pane"></div>
+      <div class="left-actions">
+        <button id="btn-new-class" class="accent" type="button">
+          <span class="ic" data-ic="plus"></span> New class
+        </button>
+        <button id="btn-new-subclass" type="button">New subclass</button>
+      </div>
+    </aside>
+
+    <section class="island right" id="detail-island">
+      <div id="detail"></div>
+    </section>
+  </main>
+
+  <footer class="island bottom">
+    <div class="status-line" id="status">Loading…</div>
+    <div class="counts" id="counts"></div>
+  </footer>
+
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+  <div id="menu-root"></div>
+
+  <script src="/static/app.js?v=5" defer></script>
+</body>
+</html>
