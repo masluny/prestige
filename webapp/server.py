@@ -626,6 +626,16 @@ def api_save():
                backup=os.path.basename(backup) if backup else None)
 
 
+@app.get("/api/ontology-text")
+def api_ontology_text():
+    """Current in-memory serialised ontology as plain text. Used by the
+    front-end Save-As flow: the browser fetches this and writes it to a
+    user-chosen location via the File System Access API."""
+    o = _ont()
+    return Response(content=o.serialize(),
+                    media_type="text/plain; charset=utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Validation, statistics, metrics, queries
 # ---------------------------------------------------------------------------

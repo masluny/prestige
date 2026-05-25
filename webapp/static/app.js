@@ -50,6 +50,7 @@ const api = {
   undo:        () => postJSON("/api/undo"),
   redo:        () => postJSON("/api/redo"),
   save:        () => postJSON("/api/save"),
+  ontologyText:() => getText("/api/ontology-text"),
   validate:    () => getJSON("/api/validate"),
   pitfalls:    () => getJSON("/api/pitfalls"),
   statistics:  () => getJSON("/api/statistics"),
@@ -1681,10 +1682,49 @@ async function doRedo() {
 }
 async function doSave() {
   try {
-    const r = await api.save();
-    toast("Saved" + (r.backup ? "  (backup: " + r.backup + ")" : ""));
+    // Prefer the File System Access API (Chrome, Edge, modern Safari):
+    // opens a NATIVE Save dialog where the user picks folder + filename,
+    // then writes the file in-place from JS - no server round-trip,
+    // no Downloads folder detour.
+    if (typeof window.showSaveFilePicker === "function") {
+      const text = await api.ontologyText();
+      const hint = (state.ontoState?.filename || "ontology.owl");
+      let handle;
+      try {
+        handle = await window.showSaveFilePicker({
+          suggestedName: hint,
+          types: [{
+            description: "OWL ontology",
+            accept: { "text/plain": [".owl", ".ofn"] },
+          }],
+        });
+      } catch (err) {
+        if (err && err.name === "AbortError") return;     // user cancelled
+        throw err;
+      }
+      const writable = await handle.createWritable();
+      await writable.write(text);
+      await writable.close();
+      toast("Saved to " + (handle.name || "chosen file"));
+      // The server still thinks the working file is the project copy,
+      // so any further plain Save writes back there. That's fine in
+      // browser mode - we're effectively doing Save-As every time.
+      await refresh();
+      return;
+    }
+    // Firefox fallback: trigger a browser download (lands in ~/Downloads
+    // with no folder picker - browser limitation).
+    const text = await api.ontologyText();
+    const hint = (state.ontoState?.filename || "ontology.owl");
+    const blob = new Blob([text], {type: "text/plain"});
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href = url; a.download = hint;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 500);
+    toast("Saved " + hint + "  (check your Downloads folder)");
     await refresh();
-  } catch (e) { toast(e.message, "error"); }
+  } catch (e) { toast(e.message || String(e), "error"); }
 }
 
 // ----- analysis modals ------------------------------------------------
