@@ -909,6 +909,78 @@ input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; }
   line-height: 1.5;
   white-space: pre-wrap;
   word-wrap: break-word;
+  position: relative;
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+.ai-msg-text { user-select: text; }
+.ai-msg-copy {
+  position: absolute;
+  top: 4px; right: 4px;
+  width: 26px; height: 26px;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s, background .15s, color .15s, border-color .15s;
+}
+.ai-msg:hover .ai-msg-copy { opacity: 1; }
+.ai-msg-copy:hover {
+  background: var(--bg-card3);
+  color: var(--text);
+  border-color: var(--border);
+}
+.ai-msg-copy.copied { color: #95e6cb; }
+
+/* ----- Project Defence modal ----- */
+.defence-tabs {
+  display: flex; gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+.defence-tab {
+  background: transparent; border: none; color: var(--muted);
+  padding: 8px 14px; border-radius: 8px 8px 0 0;
+  font-size: 13px; cursor: pointer;
+}
+.defence-tab:hover { color: var(--text); }
+.defence-tab.active {
+  color: var(--accent); background: var(--bg-card2);
+  border-bottom: 2px solid var(--accent);
+}
+.defence-panes { min-height: 360px; }
+.defence-sign-summary {
+  background: var(--bg-card2);
+  padding: 10px 14px; border-radius: 8px;
+  margin-bottom: 12px; font-size: 13px;
+}
+.defence-sign-list {
+  max-height: 480px; overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.defence-sign-row {
+  display: grid;
+  grid-template-columns: 64px 1fr 220px auto;
+  gap: 10px; align-items: center;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+.defence-sign-row:last-child { border-bottom: none; }
+.defence-sign-row.found .defence-code { color: #95e6cb; }
+.defence-sign-row.missing .defence-code { color: #f28779; }
+.defence-sign-row .defence-code { font-family: var(--font-mono); font-weight: 600; }
+.defence-sign-row .defence-spanish { color: var(--muted); font-size: 11.5px; }
+.defence-sign-row .defence-matches {
+  font-family: var(--font-mono); font-size: 11px;
+  color: var(--dim); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ai-msg.user {
   background: var(--bg-sel);

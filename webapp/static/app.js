@@ -82,6 +82,15 @@ const api = {
   charact:     (b) => postJSON("/api/characteristic", b),
   inverse:     (b) => postJSON("/api/inverse-properties", b),
   equivProp:   (b) => postJSON("/api/equivalent-properties", b),
+  dlQuery:         (b) => postJSON("/api/dl-query", b),
+  signCoverage:    () => getJSON("/api/defence/sign-coverage"),
+  signsNoSymbols:  (b) => postJSON("/api/defence/signs-without-symbols", b),
+  importAlignment: (file) => {
+    const fd = new FormData(); fd.append("file", file);
+    return jsonFetch("/api/defence/import-alignment",
+                     {method: "POST", body: fd});
+  },
+  checkDisjoint:   (b) => postJSON("/api/defence/check-disjoint", b),
 };
 
 // ----- app state ------------------------------------------------------
@@ -200,7 +209,34 @@ const ai = {
         e.className = "ai-msg " + (m.role === "user" ? "user" : "ai")
                        + (m.thinking ? " thinking" : "")
                        + (m.error ? " error" : "");
-        e.textContent = m.content;
+
+        const text = document.createElement("div");
+        text.className = "ai-msg-text";
+        text.textContent = m.content;
+        e.appendChild(text);
+
+        // Copy button on every AI response that isn't "thinking..." or an error.
+        if (m.role === "ai" && !m.thinking && !m.error) {
+          const cp = document.createElement("button");
+          cp.className = "ai-msg-copy";
+          cp.title = "Copy to clipboard";
+          cp.innerHTML = "⧉";
+          cp.onclick = async (ev) => {
+            ev.stopPropagation();
+            try {
+              await navigator.clipboard.writeText(m.content);
+              cp.innerHTML = "✓";
+              cp.classList.add("copied");
+              setTimeout(() => {
+                cp.innerHTML = "⧉";
+                cp.classList.remove("copied");
+              }, 1200);
+            } catch (err) {
+              toast("Copy failed: " + (err.message || err), "error");
+            }
+          };
+          e.appendChild(cp);
+        }
         msgs.appendChild(e);
       }
       setTimeout(() => { msgs.scrollTop = msgs.scrollHeight; }, 0);
@@ -737,6 +773,9 @@ function toolsMenu() {
 }
 function examMenu() {
   return [
+    {label: "DL Query (reasoner-backed)…", onClick: openDLQueryModal},
+    {label: "Project Defence rehearsal…",  onClick: openDefenceModal},
+    {sep: true},
     {label: "Competency-question query…", onClick: openQueryModal},
     {label: "Pitfall & quality scan…",    onClick: openPitfallsModal},
     {label: "Hierarchy outline…",         onClick: openOutlineModal},
@@ -1875,6 +1914,382 @@ async function openDiffModal() {
   };
   modal({title: "Compare with another file", content, wide: true, hideFooter: true});
 }
+
+async function openDLQueryModal() {
+  const exprF = textField({
+    label: "Class expression (Manchester syntax)",
+    multiline: true, rows: 3,
+    value: "RoadSign and not (hasSymbol some Symbol)",
+    placeholder: "RoadSign and not (hasSymbol some Symbol)",
+  });
+  const typeF = selectField({label: "Query", options: [
+    {value: "subclasses",   label: "Subclasses of expression"},
+    {value: "superclasses", label: "Superclasses of expression"},
+    {value: "instances",    label: "Instances of expression"},
+    {value: "equivalents",  label: "Equivalent named classes"},
+    {value: "satisfiable",  label: "Is expression satisfiable?"},
+  ], value: "subclasses"});
+  const reasonerF = selectField({label: "Reasoner",
+    options: [{value: "hermit", label: "HermiT"},
+              {value: "pellet", label: "Pellet (needs Java 25+)"}],
+    value: "hermit"});
+
+  const content = document.createElement("div");
+  content.appendChild(intro(
+    "Type a Description-Logic class expression in Manchester syntax. " +
+    "Supports: <code>and</code>, <code>or</code>, <code>not</code>, " +
+    "<code>some</code>, <code>only</code>, <code>value</code>, parens. " +
+    "The reasoner runs on the current in-memory ontology — your edits are " +
+    "honoured even if you haven't saved yet."));
+  content.appendChild(buildForm([exprF, typeF, reasonerF]));
+
+  const runBtn  = document.createElement("button");
+  runBtn.className = "accent"; runBtn.textContent = "Execute";
+  const copyBtn = document.createElement("button");
+  copyBtn.textContent = "Copy results"; copyBtn.disabled = true;
+  const ctrl = document.createElement("div");
+  ctrl.style.cssText = "display:flex;gap:8px;margin:8px 0 12px;";
+  ctrl.appendChild(runBtn); ctrl.appendChild(copyBtn);
+  content.appendChild(ctrl);
+
+  const out = document.createElement("div");
+  out.style.cssText = "white-space:pre-wrap;font-family:var(--font-mono);" +
+                      "font-size:12.5px;max-height:380px;overflow:auto;" +
+                      "background:var(--bg-desk);padding:10px;border-radius:8px;" +
+                      "border:1px solid var(--border);";
+  out.textContent = "Click Execute to run the query.";
+  content.appendChild(out);
+
+  let lastText = "";
+  const run = async () => {
+    out.textContent = "Running reasoner…";
+    copyBtn.disabled = true;
+    try {
+      const r = await api.dlQuery({
+        expression: exprF.get(),
+        query_type: typeF.get(),
+        reasoner: reasonerF.get(),
+      });
+      const lines = [];
+      lines.push(`Expression: ${r.expression}`);
+      lines.push(`Query: ${r.type}    Reasoner: ${r.reasoner}` +
+                 (r.skipped ? `    Axioms skipped: ${r.skipped}` : ""));
+      lines.push("");
+      if (r.type === "satisfiable") {
+        lines.push(r.satisfiable ? "✓ Satisfiable" : "✗ NOT satisfiable (inconsistent)");
+      } else {
+        const items = r.results || [];
+        lines.push(`Results (${items.length}):`);
+        if (items.length) {
+          for (const q of items) lines.push("  " + q);
+        } else {
+          lines.push("  (none)");
+        }
+      }
+      lastText = lines.join("\n");
+      out.textContent = lastText;
+      copyBtn.disabled = false;
+    } catch (e) {
+      out.textContent = "Error:\n" + (e.message || String(e));
+    }
+  };
+  runBtn.onclick = run;
+  copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(lastText);
+      copyBtn.textContent = "Copied ✓";
+      setTimeout(() => copyBtn.textContent = "Copy results", 1200);
+    } catch (e) { toast("Copy failed: " + (e.message || e), "error"); }
+  };
+  modal({title: "DL Query", content, wide: true, hideFooter: true});
+}
+
+
+async function openDefenceModal() {
+  // 4 tabs: Sign coverage / Signs w/o symbols / Import alignment / Disjointness
+  const content = document.createElement("div");
+  content.appendChild(intro(
+    "Helpers for the Project Defence rehearsal — sign coverage check, " +
+    "the two DL queries, and the MTDS alignment import."));
+
+  const tabs = document.createElement("div");
+  tabs.className = "defence-tabs";
+  const panes = document.createElement("div");
+  panes.className = "defence-panes";
+
+  const tabSpecs = [
+    ["coverage", "1. Sign coverage",        buildSignCoveragePane],
+    ["nosym",    "2. Signs without symbols", buildSignsNoSymbolsPane],
+    ["align",    "3. Import alignment",      buildImportAlignmentPane],
+    ["disjoint", "4. Disjointness check",    buildDisjointnessPane],
+  ];
+  let activeIdx = 0;
+  const tabButtons = [];
+
+  function activate(idx) {
+    activeIdx = idx;
+    tabButtons.forEach((b, i) => b.classList.toggle("active", i === idx));
+    panes.innerHTML = "";
+    panes.appendChild(tabSpecs[idx][2]());
+  }
+
+  tabSpecs.forEach((spec, idx) => {
+    const b = document.createElement("button");
+    b.className = "defence-tab"; b.textContent = spec[1];
+    b.onclick = () => activate(idx);
+    tabs.appendChild(b);
+    tabButtons.push(b);
+  });
+  content.appendChild(tabs);
+  content.appendChild(panes);
+  activate(0);
+
+  modal({title: "Project Defence rehearsal", content,
+         wide: true, fullscreen: true, hideFooter: true});
+}
+
+
+function buildSignCoveragePane() {
+  const wrap = document.createElement("div");
+  wrap.innerHTML = `
+    <p class="form-help">For each Vienna Convention warning sign (P-1 … P-50)
+    we look for a class in your ontology with a matching local name or
+    <code>rdfs:label</code>. Missing signs are highlighted in coral.</p>
+    <div class="defence-sign-summary" id="cov-summary">Loading…</div>
+    <div class="defence-sign-list" id="cov-list"></div>`;
+  const run = async () => {
+    const summary = wrap.querySelector("#cov-summary");
+    const list    = wrap.querySelector("#cov-list");
+    summary.textContent = "Checking…";
+    try {
+      const r = await api.signCoverage();
+      summary.innerHTML =
+        `<strong>${r.covered}</strong> / ${r.total} covered, ` +
+        `<strong style="color:#f28779;">${r.missing}</strong> missing.`;
+      list.innerHTML = "";
+      for (const s of r.signs) {
+        const row = document.createElement("div");
+        row.className = "defence-sign-row " + (s.found ? "found" : "missing");
+        row.innerHTML = `<span class="defence-code">${escapeHTML(s.code)}</span>
+          <span class="defence-spanish">${escapeHTML(s.spanish)}</span>
+          <span class="defence-matches">${
+            s.matches.map(m => escapeHTML(m)).join(", ") || "—"
+          }</span>`;
+        if (!s.found) {
+          const addBtn = document.createElement("button");
+          addBtn.className = "compact"; addBtn.textContent = "+ Add class";
+          addBtn.onclick = () => {
+            const suggested = s.code.replace(/-/g, "_") + "_" +
+              s.spanish.split(/\s+/)[0].toLowerCase();
+            openNewClassModal(null);
+            setTimeout(() => {
+              const inp = document.querySelector('.modal input[type="text"]');
+              if (inp && !inp.value) inp.value = suggested;
+            }, 100);
+          };
+          row.appendChild(addBtn);
+        }
+        list.appendChild(row);
+      }
+    } catch (e) {
+      summary.textContent = "Error: " + (e.message || String(e));
+    }
+  };
+  setTimeout(run, 50);
+  return wrap;
+}
+
+
+function buildSignsNoSymbolsPane() {
+  const wrap = document.createElement("div");
+  const parentF = textField({label: "Parent class",   value: "RoadSign"});
+  const propF   = textField({label: "Symbol property",  value: "hasSymbol"});
+  const symF    = textField({label: "Symbol class",     value: "Symbol"});
+  const reasonerF = selectField({label: "Reasoner",
+    options: [{value: "hermit", label: "HermiT"},
+              {value: "pellet", label: "Pellet (Java 25+)"}],
+    value: "hermit"});
+  const form = buildForm([parentF, propF, symF, reasonerF]);
+  wrap.appendChild(intro(
+    "DL query: <code>RoadSign and not (hasSymbol some Symbol)</code>. " +
+    "Returns named road-sign classes whose definition does not require any " +
+    "symbol. Adjust the three names above if your ontology uses different " +
+    "ones."));
+  wrap.appendChild(form);
+  const runBtn  = document.createElement("button");
+  runBtn.className = "accent"; runBtn.textContent = "Run query";
+  const copyBtn = document.createElement("button");
+  copyBtn.textContent = "Copy"; copyBtn.disabled = true;
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;gap:8px;margin:8px 0 12px;";
+  row.appendChild(runBtn); row.appendChild(copyBtn);
+  wrap.appendChild(row);
+  const out = document.createElement("pre");
+  out.style.cssText = "white-space:pre-wrap;font-family:var(--font-mono);" +
+                      "font-size:12.5px;max-height:340px;overflow:auto;" +
+                      "background:var(--bg-desk);padding:10px;border-radius:8px;" +
+                      "border:1px solid var(--border);";
+  out.textContent = "(no results yet)";
+  wrap.appendChild(out);
+
+  let lastText = "";
+  runBtn.onclick = async () => {
+    out.textContent = "Running reasoner…"; copyBtn.disabled = true;
+    try {
+      const r = await api.signsNoSymbols({
+        parent_class: parentF.get(),
+        symbol_property: propF.get(),
+        symbol_class: symF.get(),
+        reasoner: reasonerF.get(),
+      });
+      const lines = [`Expression: ${r.expression}`,
+                     `Reasoner: ${r.reasoner}`,
+                     ""];
+      if (r.error) lines.push("Error: " + r.error);
+      else {
+        const items = r.results || [];
+        lines.push(`Results (${items.length}):`);
+        for (const q of items) lines.push("  " + q);
+        if (!items.length) lines.push("  (none — every road sign requires a symbol)");
+      }
+      lastText = lines.join("\n");
+      out.textContent = lastText;
+      copyBtn.disabled = false;
+    } catch (e) {
+      out.textContent = "Error:\n" + (e.message || String(e));
+    }
+  };
+  copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(lastText);
+      copyBtn.textContent = "Copied ✓";
+      setTimeout(() => copyBtn.textContent = "Copy", 1200);
+    } catch (e) { toast(e.message || e, "error"); }
+  };
+  return wrap;
+}
+
+
+function buildImportAlignmentPane() {
+  const wrap = document.createElement("div");
+  wrap.appendChild(intro(
+    "Merge another OWL Functional Syntax file into the current ontology " +
+    "(e.g. <code>alignment.owl</code> mapping your classes to MTDS " +
+    "categories). Duplicate <code>Declaration</code> axioms are skipped; " +
+    "every other axiom is appended. Saves and undo work as usual."));
+  const fileF = document.createElement("input");
+  fileF.type = "file";
+  const runBtn = document.createElement("button");
+  runBtn.className = "accent"; runBtn.textContent = "Import";
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;gap:8px;align-items:center;margin:8px 0;";
+  row.appendChild(fileF); row.appendChild(runBtn);
+  wrap.appendChild(row);
+  const out = document.createElement("pre");
+  out.style.cssText = "white-space:pre-wrap;font-family:var(--font-mono);" +
+                      "font-size:12.5px;background:var(--bg-desk);" +
+                      "padding:10px;border-radius:8px;border:1px solid var(--border);";
+  out.textContent = "(pick an .owl file and click Import)";
+  wrap.appendChild(out);
+
+  runBtn.onclick = async () => {
+    if (!fileF.files || !fileF.files.length) {
+      out.textContent = "Choose a file first."; return;
+    }
+    out.textContent = "Importing…";
+    try {
+      const r = await api.importAlignment(fileF.files[0]);
+      out.textContent =
+        `${r.message}\n` +
+        `Added axioms: ${r.added}\n` +
+        `Skipped duplicate declarations: ${r.skipped_duplicate_declarations}\n` +
+        `Source ontology IRI: ${r.ontology_iri || "(none)"}\n` +
+        `Source version IRI:  ${r.version_iri  || "(none)"}`;
+      await refresh();
+      if (state.selected) await selectEntity(state.selected);
+    } catch (e) {
+      out.textContent = "Error:\n" + (e.message || String(e));
+    }
+  };
+  return wrap;
+}
+
+
+function buildDisjointnessPane() {
+  const wrap = document.createElement("div");
+  wrap.appendChild(intro(
+    "Ask the reasoner whether two named classes are disjoint, i.e. " +
+    "whether their intersection is unsatisfiable. Pre-filled with the " +
+    "MTDS speed-limit example from the rehearsal: " +
+    "<code>information—minimum-speed-40-g1</code> vs " +
+    "<code>regulatory—maximum-speedlimit-40-g1</code> — adjust to any two " +
+    "class names from your ontology."));
+  const aF = textField({label: "Class A", list: "djA-dl",
+    value: "information--minimum-speed-40-g1"});
+  const bF = textField({label: "Class B", list: "djB-dl",
+    value: "regulatory--maximum-speedlimit-40-g1"});
+  const reasonerF = selectField({label: "Reasoner",
+    options: [{value: "hermit", label: "HermiT"},
+              {value: "pellet", label: "Pellet (Java 25+)"}],
+    value: "hermit"});
+  const form = buildForm([aF, bF, reasonerF]);
+  // Autocomplete with class names
+  const datalist = document.createElement("datalist");
+  datalist.id = "djA-dl";
+  for (const n of classNames()) {
+    const o = document.createElement("option"); o.value = n;
+    datalist.appendChild(o);
+  }
+  const datalist2 = datalist.cloneNode(true); datalist2.id = "djB-dl";
+  form.appendChild(datalist); form.appendChild(datalist2);
+  wrap.appendChild(form);
+
+  const runBtn  = document.createElement("button");
+  runBtn.className = "accent"; runBtn.textContent = "Check disjointness";
+  const copyBtn = document.createElement("button");
+  copyBtn.textContent = "Copy"; copyBtn.disabled = true;
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;gap:8px;margin:8px 0 12px;";
+  row.appendChild(runBtn); row.appendChild(copyBtn);
+  wrap.appendChild(row);
+  const out = document.createElement("pre");
+  out.style.cssText = "white-space:pre-wrap;font-family:var(--font-mono);" +
+                      "font-size:12.5px;max-height:300px;overflow:auto;" +
+                      "background:var(--bg-desk);padding:10px;border-radius:8px;" +
+                      "border:1px solid var(--border);";
+  out.textContent = "(no result yet)";
+  wrap.appendChild(out);
+
+  let lastText = "";
+  runBtn.onclick = async () => {
+    out.textContent = "Running reasoner…"; copyBtn.disabled = true;
+    try {
+      const r = await api.checkDisjoint({
+        class_a: aF.get(),
+        class_b: bF.get(),
+        reasoner: reasonerF.get(),
+      });
+      lastText =
+        `Class A: ${aF.get()}\nClass B: ${bF.get()}\n` +
+        `Reasoner: ${r.reasoner}\n\n` +
+        (r.disjoint ? "✓ DISJOINT" : "✗ NOT disjoint") + "\n\n" +
+        r.explanation;
+      out.textContent = lastText;
+      copyBtn.disabled = false;
+    } catch (e) {
+      out.textContent = "Error:\n" + (e.message || String(e));
+    }
+  };
+  copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(lastText);
+      copyBtn.textContent = "Copied ✓";
+      setTimeout(() => copyBtn.textContent = "Copy", 1200);
+    } catch (e) { toast(e.message || e, "error"); }
+  };
+  return wrap;
+}
+
 
 async function openSparqlModal() {
   // Build a sensible sample query, using the loaded ontology's IRI if any.

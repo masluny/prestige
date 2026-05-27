@@ -23,6 +23,8 @@ from pydantic import BaseModel
 
 from core import Ontology, ModelError
 from core import ofn, examtools, graphview, reasoner
+from core import dl_query as _dl
+from core import defence as _defence
 
 HERE = Path(__file__).resolve().parent
 STATIC = HERE / "static"
@@ -678,6 +680,103 @@ def api_query(body: QueryIn):
     rows = examtools.run_query(_ont(), body.key, cls=body.cls,
                                 prop=body.prop, value=body.value)
     return {"rows": [{"text": text, "qname": qname} for text, qname in rows]}
+
+
+# ---------------------------------------------------------------------------
+# DL Query (Manchester-style, reasoner-backed)
+# ---------------------------------------------------------------------------
+
+class DLQueryIn(BaseModel):
+    expression: str
+    query_type: str = "subclasses"
+    reasoner: str = "hermit"
+
+
+@app.post("/api/dl-query")
+def api_dl_query(body: DLQueryIn):
+    import traceback as _tb
+    try:
+        return _dl.run_query(_ont(), body.expression,
+                             query_type=body.query_type,
+                             reasoner_name=body.reasoner)
+    except _dl.reasoner.ReasonerUnavailable as exc:
+        raise HTTPException(400, str(exc))
+    except SyntaxError as exc:
+        raise HTTPException(400, "Parse error: %s" % exc)
+    except Exception as exc:
+        msg = str(exc)
+        if "UnsupportedClassVersionError" in msg or "class file version 69" in msg:
+            raise HTTPException(
+                400,
+                "DL query needs Java 25 or newer.\n"
+                "Free download: https://adoptium.net/temurin/releases/?version=25")
+        raise HTTPException(500, "%s\n\n%s" % (exc, _tb.format_exc()))
+
+
+# ---------------------------------------------------------------------------
+# Project defence rehearsal tools
+# ---------------------------------------------------------------------------
+
+@app.get("/api/defence/sign-coverage")
+def api_defence_sign_coverage():
+    return _defence.sign_coverage(_ont())
+
+
+class SignsWithoutSymbolsIn(BaseModel):
+    parent_class:    str = "RoadSign"
+    symbol_property: str = "hasSymbol"
+    symbol_class:    str = "Symbol"
+    reasoner:        str = "hermit"
+
+
+@app.post("/api/defence/signs-without-symbols")
+def api_defence_signs_without_symbols(body: SignsWithoutSymbolsIn):
+    import traceback as _tb
+    try:
+        return _defence.signs_without_symbols(
+            _ont(),
+            parent_class=body.parent_class,
+            symbol_property=body.symbol_property,
+            symbol_class=body.symbol_class,
+            reasoner_name=body.reasoner)
+    except Exception as exc:
+        raise HTTPException(500, "%s\n\n%s" % (exc, _tb.format_exc()))
+
+
+@app.post("/api/defence/import-alignment")
+async def api_defence_import_alignment(file: UploadFile = File(...)):
+    o = _ont()
+    raw = (await file.read()).decode("utf-8", "replace")
+    info = _defence.import_alignment(o, raw)
+    if not info.get("ok"):
+        raise HTTPException(400, info.get("error", "Unknown error."))
+    return _ok("Imported %d axioms" % info["added"], **info)
+
+
+class DisjointCheckIn(BaseModel):
+    class_a:  str
+    class_b:  str
+    reasoner: str = "hermit"
+
+
+@app.post("/api/defence/check-disjoint")
+def api_defence_check_disjoint(body: DisjointCheckIn):
+    import traceback as _tb
+    try:
+        return _defence.check_disjoint(_ont(), body.class_a, body.class_b,
+                                        reasoner_name=body.reasoner)
+    except _dl.reasoner.ReasonerUnavailable as exc:
+        raise HTTPException(400, str(exc))
+    except SyntaxError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        msg = str(exc)
+        if "UnsupportedClassVersionError" in msg or "class file version 69" in msg:
+            raise HTTPException(
+                400,
+                "Disjointness check needs Java 25 or newer.\n"
+                "Free download: https://adoptium.net/temurin/releases/?version=25")
+        raise HTTPException(500, "%s\n\n%s" % (exc, _tb.format_exc()))
 
 
 @app.get("/api/outline")
